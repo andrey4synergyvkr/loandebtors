@@ -1,0 +1,838 @@
+openapi: 3.1.0
+info:
+  title: LoanDebtors Notifications (Operator API)
+  version: 0.1.0
+  description: |
+    API оператора кампаний: управление кампаниями и логическими шаблонами,
+    запуск и остановка рассылки, просмотр состояния сообщений.
+
+    Аутентификация и авторизация не выполняются (OC-2). API доступен только
+    из доверенного контура банка. Контракт является источником истины для
+    реализации сервиса Notifications.
+servers:
+  - url: http://localhost:8001
+    description: Локальный учебный стенд
+tags:
+  - name: campaigns
+    description: Кампании и запуск рассылки
+  - name: templates
+    description: Логические шаблоны уведомлений
+  - name: messages
+    description: Состояние сообщений кампании
+  - name: system
+    description: Проверка работоспособности
+paths:
+  /health:
+    get:
+      tags: [system]
+      operationId: getHealth
+      summary: Проверить работоспособность сервиса
+      responses:
+        '200':
+          description: Сервис готов принимать запросы
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Сервис не готов принимать запросы
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /v1/campaigns:
+    get:
+      tags: [campaigns]
+      operationId: listCampaigns
+      summary: Получить список кампаний
+      parameters:
+        - $ref: '#/components/parameters/CampaignStatusFilter'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Страница кампаний
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignList'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+    post:
+      tags: [campaigns]
+      operationId: createCampaign
+      summary: Создать кампанию
+      description: |
+        Кампания создается в статусе draft. Выборка должников выполняется при
+        запуске, расписание задается отдельным вызовом.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCampaignRequest'
+      responses:
+        '201':
+          description: Кампания создана
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Campaign'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/campaigns/{campaign_id}:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    get:
+      tags: [campaigns]
+      operationId: getCampaign
+      summary: Получить кампанию
+      responses:
+        '200':
+          description: Кампания
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Campaign'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+    patch:
+      tags: [campaigns]
+      operationId: updateCampaign
+      summary: Изменить кампанию в статусе draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCampaignRequest'
+      responses:
+        '200':
+          description: Кампания обновлена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Campaign'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/campaigns/{campaign_id}/schedule:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    post:
+      tags: [campaigns]
+      operationId: scheduleCampaign
+      summary: Запланировать запуск кампании
+      description: |
+        Публикует campaign.scheduled. Кампания должна быть в статусе draft.
+        Запуск выполнит Scheduler в указанное время.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScheduleCampaignRequest'
+      responses:
+        '202':
+          description: Расписание принято
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Campaign'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/campaigns/{campaign_id}/start:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    post:
+      tags: [campaigns]
+      operationId: startCampaign
+      summary: Запустить кампанию немедленно
+      description: |
+        Запуск асинхронный. Сервис полностью выгружает выборку из АБС, после чего
+        создает сообщения и публикует message.send. Частичная выборка не допускается.
+      responses:
+        '202':
+          description: Запуск принят
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Campaign'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/campaigns/{campaign_id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    post:
+      tags: [campaigns]
+      operationId: cancelCampaign
+      summary: Остановить кампанию
+      description: |
+        Останавливает запланированную или выполняющуюся кампанию. Неотправленные
+        сообщения получают статус cancelled.
+      responses:
+        '202':
+          description: Остановка принята
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Campaign'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/campaigns/{campaign_id}/messages:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    get:
+      tags: [messages]
+      operationId: listCampaignMessages
+      summary: Получить сообщения кампании
+      parameters:
+        - $ref: '#/components/parameters/MessageStatusFilter'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Страница сообщений
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageList'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/campaigns/{campaign_id}/messages/{message_id}:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+      - $ref: '#/components/parameters/MessageId'
+    get:
+      tags: [messages]
+      operationId: getCampaignMessage
+      summary: Получить сообщение кампании
+      responses:
+        '200':
+          description: Сообщение
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/templates:
+    get:
+      tags: [templates]
+      operationId: listTemplates
+      summary: Получить логические шаблоны
+      parameters:
+        - $ref: '#/components/parameters/TemplateStatusFilter'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Страница шаблонов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateList'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+    post:
+      tags: [templates]
+      operationId: createTemplate
+      summary: Создать версию логического шаблона
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTemplateRequest'
+      responses:
+        '201':
+          description: Шаблон создан
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/templates/{template_key}:
+    parameters:
+      - $ref: '#/components/parameters/TemplateKeyPath'
+    get:
+      tags: [templates]
+      operationId: getTemplate
+      summary: Получить версию логического шаблона
+      parameters:
+        - name: version
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+          description: Версия шаблона; если не задана, возвращается последняя активная
+      responses:
+        '200':
+          description: Шаблон
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/templates/{template_key}/versions/{version}:
+    parameters:
+      - $ref: '#/components/parameters/TemplateKeyPath'
+      - $ref: '#/components/parameters/TemplateVersionPath'
+    patch:
+      tags: [templates]
+      operationId: updateTemplateStatus
+      summary: Изменить статус версии шаблона
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTemplateStatusRequest'
+      responses:
+        '200':
+          description: Статус обновлен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+components:
+  parameters:
+    CampaignId:
+      name: campaign_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    MessageId:
+      name: message_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    TemplateKeyPath:
+      name: template_key
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/TemplateKey'
+    TemplateVersionPath:
+      name: version
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    CampaignStatusFilter:
+      name: status
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/CampaignStatus'
+    MessageStatusFilter:
+      name: status
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/MessageStatus'
+    TemplateStatusFilter:
+      name: status
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/TemplateStatus'
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    Offset:
+      name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+  responses:
+    NotFound:
+      description: Объект не найден
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: Действие недопустимо в текущем состоянии
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    UnprocessableEntity:
+      description: Ошибка валидации запроса
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ServiceUnavailable:
+      description: Внешняя зависимость недоступна
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    Channel:
+      type: string
+      description: Код канала доставки; в первой версии поддерживается только email
+      enum: [email]
+      examples: [email]
+    TemplateKey:
+      type: string
+      description: Логический ключ шаблона
+      pattern: '^[a-z][a-z0-9._-]*$'
+      minLength: 1
+      maxLength: 100
+    CampaignStatus:
+      type: string
+      enum: [draft, scheduled, running, completed, cancelled, failed]
+    TemplateStatus:
+      type: string
+      enum: [draft, active, archived]
+    MessageStatus:
+      type: string
+      enum: [pending, queued, sent, failed, cancelled]
+    ScheduleKind:
+      type: string
+      enum: [one_off, cron]
+    ScheduleSpec:
+      type: object
+      additionalProperties: false
+      required: [kind, timezone]
+      properties:
+        kind:
+          $ref: '#/components/schemas/ScheduleKind'
+        timezone:
+          type: string
+          description: Часовой пояс IANA
+          examples: [Europe/Moscow]
+        run_at:
+          type: [string, "null"]
+          format: date-time
+          description: Заполняется только для one_off
+        cron:
+          type: [string, "null"]
+          description: Заполняется только для cron
+          examples: ['0 10 * * 1-5']
+    DebtorSelection:
+      type: object
+      additionalProperties: false
+      required: [criteria]
+      properties:
+        criteria:
+          type: object
+          description: Параметры выборки для АБС; состав ключей задает контракт АБС
+          additionalProperties:
+            type: string
+          examples:
+            - min_days_overdue: '30'
+    Recipient:
+      type: object
+      additionalProperties: false
+      required: [channel, address]
+      properties:
+        channel:
+          $ref: '#/components/schemas/Channel'
+        address:
+          type: string
+          description: Адрес получателя в формате канала; в логах и аудите маскируется
+    Campaign:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - channel
+        - template_key
+        - template_version
+        - status
+        - selection
+        - selected_debtors
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        channel:
+          $ref: '#/components/schemas/Channel'
+        template_key:
+          $ref: '#/components/schemas/TemplateKey'
+        template_version:
+          type: integer
+          minimum: 1
+        status:
+          $ref: '#/components/schemas/CampaignStatus'
+        selection:
+          $ref: '#/components/schemas/DebtorSelection'
+        schedule:
+          oneOf:
+            - $ref: '#/components/schemas/ScheduleSpec'
+            - type: "null"
+        selected_debtors:
+          type: integer
+          minimum: 0
+          description: Сколько должников фактически выгружено
+        selection_expected:
+          type: [integer, "null"]
+          minimum: 0
+          description: Ожидаемое число должников по данным АБС
+        selection_completed_at:
+          type: [string, "null"]
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        scheduled_at:
+          type: [string, "null"]
+          format: date-time
+        started_at:
+          type: [string, "null"]
+          format: date-time
+        finished_at:
+          type: [string, "null"]
+          format: date-time
+        cancelled_at:
+          type: [string, "null"]
+          format: date-time
+        failure_reason:
+          type: [string, "null"]
+    CampaignList:
+      type: object
+      additionalProperties: false
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Campaign'
+        total:
+          type: integer
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+        offset:
+          type: integer
+          minimum: 0
+    CreateCampaignRequest:
+      type: object
+      additionalProperties: false
+      required: [name, channel, template_key, template_version, selection]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        channel:
+          $ref: '#/components/schemas/Channel'
+        template_key:
+          $ref: '#/components/schemas/TemplateKey'
+        template_version:
+          type: integer
+          minimum: 1
+        selection:
+          $ref: '#/components/schemas/DebtorSelection'
+    UpdateCampaignRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        template_key:
+          $ref: '#/components/schemas/TemplateKey'
+        template_version:
+          type: integer
+          minimum: 1
+        selection:
+          $ref: '#/components/schemas/DebtorSelection'
+    ScheduleCampaignRequest:
+      type: object
+      additionalProperties: false
+      required: [schedule]
+      properties:
+        schedule:
+          $ref: '#/components/schemas/ScheduleSpec'
+    Message:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - campaign_id
+        - debtor_id
+        - channel
+        - template_key
+        - template_version
+        - recipient
+        - status
+        - attempt_count
+        - max_attempts
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        campaign_id:
+          type: string
+          format: uuid
+        debtor_id:
+          type: string
+        channel:
+          $ref: '#/components/schemas/Channel'
+        template_key:
+          $ref: '#/components/schemas/TemplateKey'
+        template_version:
+          type: integer
+          minimum: 1
+        variables:
+          type: object
+          additionalProperties:
+            type: string
+        recipient:
+          $ref: '#/components/schemas/Recipient'
+        status:
+          $ref: '#/components/schemas/MessageStatus'
+        attempt_count:
+          type: integer
+          minimum: 0
+        max_attempts:
+          type: integer
+          minimum: 1
+        created_at:
+          type: string
+          format: date-time
+        queued_at:
+          type: [string, "null"]
+          format: date-time
+        last_attempt_at:
+          type: [string, "null"]
+          format: date-time
+        sent_at:
+          type: [string, "null"]
+          format: date-time
+        failed_at:
+          type: [string, "null"]
+          format: date-time
+        next_attempt_at:
+          type: [string, "null"]
+          format: date-time
+        last_error_code:
+          type: [string, "null"]
+        last_error_message:
+          type: [string, "null"]
+    MessageList:
+      type: object
+      additionalProperties: false
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+        total:
+          type: integer
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+        offset:
+          type: integer
+          minimum: 0
+    Template:
+      type: object
+      additionalProperties: false
+      required:
+        - key
+        - version
+        - description
+        - required_variables
+        - status
+        - created_at
+        - updated_at
+      properties:
+        key:
+          $ref: '#/components/schemas/TemplateKey'
+        version:
+          type: integer
+          minimum: 1
+        description:
+          type: string
+        required_variables:
+          type: array
+          items:
+            type: string
+            pattern: '^[a-z][a-z0-9_]*$'
+            minLength: 1
+            maxLength: 64
+        status:
+          $ref: '#/components/schemas/TemplateStatus'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    TemplateList:
+      type: object
+      additionalProperties: false
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Template'
+        total:
+          type: integer
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+        offset:
+          type: integer
+          minimum: 0
+    CreateTemplateRequest:
+      type: object
+      additionalProperties: false
+      required: [key, version, description, required_variables]
+      properties:
+        key:
+          $ref: '#/components/schemas/TemplateKey'
+        version:
+          type: integer
+          minimum: 1
+        description:
+          type: string
+          minLength: 1
+        required_variables:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            pattern: '^[a-z][a-z0-9_]*$'
+            minLength: 1
+            maxLength: 64
+    UpdateTemplateStatusRequest:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          $ref: '#/components/schemas/TemplateStatus'
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          examples: ['urn:loandebtors:error:conflict']
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 100
+          maximum: 599
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri-reference
+        code:
+          type: string
+          description: Машинный код доменной ошибки
+    HealthStatus:
+      type: string
+      enum: [ok, degraded, unavailable]
+    HealthCheck:
+      type: object
+      additionalProperties: false
+      required: [name, status]
+      properties:
+        name:
+          type: string
+        status:
+          $ref: '#/components/schemas/HealthStatus'
+        detail:
+          type: [string, "null"]
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status, service, version, uptime_seconds, checks]
+      properties:
+        status:
+          $ref: '#/components/schemas/HealthStatus'
+        service:
+          type: string
+          examples: [notifications]
+        version:
+          type: string
+          examples: ['0.1.0']
+        uptime_seconds:
+          type: number
+          format: double
+          minimum: 0
+        checks:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/HealthCheck'

@@ -1,0 +1,637 @@
+asyncapi: 3.0.0
+id: 'urn:loandebtors:rabbitmq'
+info:
+  title: LoanDebtors RabbitMQ Contracts
+  version: 0.1.0
+  description: |
+    Команды и события RabbitMQ для LoanDebtors.
+
+    Обмен идет через topic exchange loan-debtors.events. Гарантия доставки
+    at-least-once, trace context передается в заголовках сообщений. Для каждой
+    очереди предусмотрены retry-очередь и DLQ.
+
+    Дедупликация зависит от типа сообщения: message_id для message.send и
+    результатов доставки, event_id для audit.event, campaign_id для команд
+    планировщика, где расписание обновляется идемпотентно.
+  x-delivery-guarantee: at-least-once
+  x-exchange: loan-debtors.events
+  x-deduplication-key: message_id, event_id или campaign_id в зависимости от сообщения
+defaultContentType: application/json
+servers:
+  rabbitmq:
+    host: localhost:5672
+    protocol: amqp
+    protocolVersion: '0.9.1'
+    description: Локальный RabbitMQ учебного стенда
+channels:
+  schedulerCommands:
+    address: scheduler.commands
+    title: Команды планировщика
+    description: |
+      Notifications публикует campaign.scheduled, Scheduler потребляет событие
+      и регистрирует задание APScheduler. Отмена запланированной кампании
+      передается событием campaign.cancelled, по нему Scheduler снимает задание.
+    messages:
+      campaignScheduled:
+        $ref: '#/components/messages/CampaignScheduled'
+      campaignCancelled:
+        $ref: '#/components/messages/CampaignCancelled'
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          name: scheduler.commands
+          durable: true
+          exclusive: false
+          autoDelete: false
+        bindingVersion: '0.3.0'
+    x-routing-keys: [campaign.scheduled, campaign.cancelled]
+    x-retry-queue: scheduler.commands.retry
+    x-dlq: scheduler.commands.dlq
+  notificationCommands:
+    address: notification.commands
+    title: Команды запуска кампании
+    description: |
+      Scheduler публикует campaign.start, Notifications потребляет событие и
+      запускает выгрузку должников.
+    messages:
+      campaignStart:
+        $ref: '#/components/messages/CampaignStart'
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          name: notification.commands
+          durable: true
+          exclusive: false
+          autoDelete: false
+        bindingVersion: '0.3.0'
+    x-routing-keys: [campaign.start]
+    x-retry-queue: notification.commands.retry
+    x-dlq: notification.commands.dlq
+  emailCommands:
+    address: email.commands
+    title: Команды отправки email
+    description: |
+      Notifications публикует message.send, Email Channel потребляет команду,
+      выбирает email-вариант шаблона и выполняет отправку.
+    messages:
+      messageSend:
+        $ref: '#/components/messages/MessageSend'
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          name: email.commands
+          durable: true
+          exclusive: false
+          autoDelete: false
+        bindingVersion: '0.3.0'
+    x-routing-keys: [message.send]
+    x-retry-queue: email.commands.retry
+    x-dlq: email.commands.dlq
+  notificationResults:
+    address: notification.results
+    title: Результаты доставки
+    description: |
+      Email Channel публикует message.sent и message.failed, Notifications
+      потребляет результаты и обновляет состояние сообщений.
+    messages:
+      messageSent:
+        $ref: '#/components/messages/MessageSent'
+      messageFailed:
+        $ref: '#/components/messages/MessageFailed'
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          name: notification.results
+          durable: true
+          exclusive: false
+          autoDelete: false
+        bindingVersion: '0.3.0'
+    x-routing-keys: [message.sent, message.failed]
+    x-retry-queue: notification.results.retry
+    x-dlq: notification.results.dlq
+  auditEvents:
+    address: audit.events
+    title: События аудита
+    description: |
+      Notifications, Scheduler и Email Channel публикуют audit.event,
+      Audit Exporter потребляет события и пишет append-only журнал. Выгрузка
+      журнала администратором фиксируется событием audit.exported, его
+      записывает сам Audit Exporter напрямую в схему audit.
+    messages:
+      auditEvent:
+        $ref: '#/components/messages/AuditEvent'
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          name: audit.events
+          durable: true
+          exclusive: false
+          autoDelete: false
+        bindingVersion: '0.3.0'
+    x-routing-keys: [audit.event]
+    x-retry-queue: audit.events.retry
+    x-dlq: audit.events.dlq
+operations:
+  publishCampaignScheduled:
+    action: send
+    channel:
+      $ref: '#/channels/schedulerCommands'
+    messages:
+      - $ref: '#/channels/schedulerCommands/messages/campaignScheduled'
+    summary: Notifications публикует campaign.scheduled
+  consumeCampaignScheduled:
+    action: receive
+    channel:
+      $ref: '#/channels/schedulerCommands'
+    messages:
+      - $ref: '#/channels/schedulerCommands/messages/campaignScheduled'
+    summary: Scheduler принимает campaign.scheduled
+  publishCampaignCancelled:
+    action: send
+    channel:
+      $ref: '#/channels/schedulerCommands'
+    messages:
+      - $ref: '#/channels/schedulerCommands/messages/campaignCancelled'
+    summary: Notifications публикует campaign.cancelled
+  consumeCampaignCancelled:
+    action: receive
+    channel:
+      $ref: '#/channels/schedulerCommands'
+    messages:
+      - $ref: '#/channels/schedulerCommands/messages/campaignCancelled'
+    summary: Scheduler принимает campaign.cancelled и снимает задание
+  publishCampaignStart:
+    action: send
+    channel:
+      $ref: '#/channels/notificationCommands'
+    messages:
+      - $ref: '#/channels/notificationCommands/messages/campaignStart'
+    summary: Scheduler публикует campaign.start
+  consumeCampaignStart:
+    action: receive
+    channel:
+      $ref: '#/channels/notificationCommands'
+    messages:
+      - $ref: '#/channels/notificationCommands/messages/campaignStart'
+    summary: Notifications принимает campaign.start
+  publishNotificationCommand:
+    action: send
+    channel:
+      $ref: '#/channels/emailCommands'
+    messages:
+      - $ref: '#/channels/emailCommands/messages/messageSend'
+    summary: Notifications публикует message.send
+  consumeNotificationCommand:
+    action: receive
+    channel:
+      $ref: '#/channels/emailCommands'
+    messages:
+      - $ref: '#/channels/emailCommands/messages/messageSend'
+    summary: Email Channel принимает message.send
+  publishMessageSent:
+    action: send
+    channel:
+      $ref: '#/channels/notificationResults'
+    messages:
+      - $ref: '#/channels/notificationResults/messages/messageSent'
+    summary: Email Channel публикует message.sent
+  publishMessageFailed:
+    action: send
+    channel:
+      $ref: '#/channels/notificationResults'
+    messages:
+      - $ref: '#/channels/notificationResults/messages/messageFailed'
+    summary: Email Channel публикует message.failed
+  consumeMessageResults:
+    action: receive
+    channel:
+      $ref: '#/channels/notificationResults'
+    messages:
+      - $ref: '#/channels/notificationResults/messages/messageSent'
+      - $ref: '#/channels/notificationResults/messages/messageFailed'
+    summary: Notifications принимает результаты доставки
+  publishAuditEvent:
+    action: send
+    channel:
+      $ref: '#/channels/auditEvents'
+    messages:
+      - $ref: '#/channels/auditEvents/messages/auditEvent'
+    summary: Сервисы публикуют audit.event
+    description: Публикуют Notifications, Scheduler и Email Channel. Audit Exporter пишет audit.exported напрямую в свой журнал.
+  consumeAuditEvent:
+    action: receive
+    channel:
+      $ref: '#/channels/auditEvents'
+    messages:
+      - $ref: '#/channels/auditEvents/messages/auditEvent'
+    summary: Audit Exporter принимает audit.event
+components:
+  messages:
+    CampaignScheduled:
+      name: CampaignScheduled
+      title: campaign.scheduled
+      summary: Запрос на постановку кампании в расписание
+      contentType: application/json
+      headers:
+        $ref: '#/components/schemas/MessageHeaders'
+      payload:
+        $ref: '#/components/schemas/CampaignScheduledPayload'
+      x-routing-key: campaign.scheduled
+      examples:
+        - name: one-off campaign
+          payload:
+            campaign_id: '3f0c1f5e-3d6a-4a7b-9c8d-1e2f3a4b5c6d'
+            schedule:
+              kind: one_off
+              timezone: Europe/Moscow
+              run_at: '2026-12-01T10:00:00Z'
+              cron: null
+            occurred_at: '2026-11-22T12:00:00Z'
+    CampaignCancelled:
+      name: CampaignCancelled
+      title: campaign.cancelled
+      summary: Отмена запланированной кампании
+      contentType: application/json
+      headers:
+        $ref: '#/components/schemas/MessageHeaders'
+      payload:
+        $ref: '#/components/schemas/CampaignCancelledPayload'
+      x-routing-key: campaign.cancelled
+      examples:
+        - name: cancel scheduled campaign
+          payload:
+            campaign_id: '3f0c1f5e-3d6a-4a7b-9c8d-1e2f3a4b5c6d'
+            occurred_at: '2026-11-22T12:30:00Z'
+    CampaignStart:
+      name: CampaignStart
+      title: campaign.start
+      summary: Команда запуска запланированной кампании
+      contentType: application/json
+      headers:
+        $ref: '#/components/schemas/MessageHeaders'
+      payload:
+        $ref: '#/components/schemas/CampaignStartPayload'
+      x-routing-key: campaign.start
+    MessageSend:
+      name: MessageSend
+      title: message.send
+      summary: Канально-нейтральная команда отправки сообщения
+      contentType: application/json
+      headers:
+        $ref: '#/components/schemas/MessageHeaders'
+      payload:
+        $ref: '#/components/schemas/NotificationCommandPayload'
+      x-routing-key: message.send
+      x-deduplication-key: message_id
+      examples:
+        - name: email message
+          payload:
+            message_id: '5a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
+            campaign_id: '3f0c1f5e-3d6a-4a7b-9c8d-1e2f3a4b5c6d'
+            debtor_id: 'ABS-100500'
+            channel: email
+            template_key: payment-reminder
+            template_version: 1
+            variables:
+              debtor_name: Иван Иванов
+              amount: '15000.00'
+              currency: RUB
+            recipient:
+              channel: email
+              address: debtor@example.com
+            idempotency_key: 3f0c1f5e-3d6a-4a7b-9c8d-1e2f3a4b5c6d:ABS-100500:email
+    MessageSent:
+      name: MessageSent
+      title: message.sent
+      summary: Провайдер принял сообщение
+      contentType: application/json
+      headers:
+        $ref: '#/components/schemas/MessageHeaders'
+      payload:
+        $ref: '#/components/schemas/MessageSentPayload'
+      x-routing-key: message.sent
+    MessageFailed:
+      name: MessageFailed
+      title: message.failed
+      summary: Попытка отправки завершилась ошибкой
+      contentType: application/json
+      headers:
+        $ref: '#/components/schemas/MessageHeaders'
+      payload:
+        $ref: '#/components/schemas/MessageFailedPayload'
+      x-routing-key: message.failed
+    AuditEvent:
+      name: AuditEvent
+      title: audit.event
+      summary: Событие для append-only журнала аудита
+      contentType: application/json
+      headers:
+        $ref: '#/components/schemas/MessageHeaders'
+      payload:
+        $ref: '#/components/schemas/AuditEventPayload'
+      x-routing-key: audit.event
+      x-deduplication-key: event_id
+  schemas:
+    MessageHeaders:
+      type: object
+      additionalProperties: true
+      required: [correlation_id]
+      properties:
+        correlation_id:
+          type: string
+          maxLength: 128
+          description: Идентификатор сценария, общий для цепочки событий
+        traceparent:
+          type: string
+          description: Заголовок W3C Trace Context
+    ScheduleKind:
+      type: string
+      enum: [one_off, cron]
+    ScheduleSpec:
+      type: object
+      additionalProperties: false
+      required: [kind, timezone]
+      properties:
+        kind:
+          $ref: '#/components/schemas/ScheduleKind'
+        timezone:
+          type: string
+          description: Часовой пояс IANA
+          examples: [Europe/Moscow]
+        run_at:
+          type: [string, "null"]
+          format: date-time
+          description: Заполняется только для one_off
+        cron:
+          type: [string, "null"]
+          description: Заполняется только для cron
+          examples: ['0 10 * * 1-5']
+      allOf:
+        - if:
+            properties:
+              kind:
+                const: one_off
+          then:
+            required: [run_at]
+            properties:
+              run_at:
+                type: string
+                format: date-time
+              cron:
+                type: "null"
+        - if:
+            properties:
+              kind:
+                const: cron
+          then:
+            required: [cron]
+            properties:
+              run_at:
+                type: "null"
+              cron:
+                type: string
+    Recipient:
+      type: object
+      additionalProperties: false
+      required: [channel, address]
+      properties:
+        channel:
+          type: string
+          pattern: '^[a-z][a-z0-9_-]*$'
+        address:
+          type: string
+          minLength: 1
+          maxLength: 320
+          description: Адрес получателя в формате канала
+    CampaignScheduledPayload:
+      type: object
+      additionalProperties: false
+      required: [campaign_id, schedule, occurred_at]
+      properties:
+        campaign_id:
+          type: string
+          format: uuid
+        schedule:
+          $ref: '#/components/schemas/ScheduleSpec'
+        occurred_at:
+          type: string
+          format: date-time
+    CampaignCancelledPayload:
+      type: object
+      additionalProperties: false
+      required: [campaign_id, occurred_at]
+      properties:
+        campaign_id:
+          type: string
+          format: uuid
+        occurred_at:
+          type: string
+          format: date-time
+    CampaignStartPayload:
+      type: object
+      additionalProperties: false
+      required: [campaign_id, scheduled_for, occurred_at]
+      properties:
+        campaign_id:
+          type: string
+          format: uuid
+        scheduled_for:
+          type: string
+          format: date-time
+        occurred_at:
+          type: string
+          format: date-time
+    NotificationCommandPayload:
+      type: object
+      additionalProperties: false
+      required:
+        - message_id
+        - campaign_id
+        - debtor_id
+        - channel
+        - template_key
+        - template_version
+        - variables
+        - recipient
+        - idempotency_key
+      properties:
+        message_id:
+          type: string
+          format: uuid
+        campaign_id:
+          type: string
+          format: uuid
+        debtor_id:
+          type: string
+        channel:
+          type: string
+          pattern: '^[a-z][a-z0-9_-]*$'
+        template_key:
+          type: string
+          pattern: '^[a-z][a-z0-9._-]*$'
+        template_version:
+          type: integer
+          minimum: 1
+        variables:
+          type: object
+          additionalProperties:
+            type: string
+        recipient:
+          $ref: '#/components/schemas/Recipient'
+        idempotency_key:
+          type: string
+    FailureOutcome:
+      type: string
+      enum: [transient_failure, permanent_failure, rate_limited]
+    MessageSentPayload:
+      type: object
+      additionalProperties: false
+      required: [message_id, campaign_id, channel, attempt_number, occurred_at]
+      properties:
+        message_id:
+          type: string
+          format: uuid
+        campaign_id:
+          type: string
+          format: uuid
+        channel:
+          type: string
+          pattern: '^[a-z][a-z0-9_-]*$'
+        attempt_number:
+          type: integer
+          minimum: 1
+        provider_message_id:
+          type: [string, "null"]
+        occurred_at:
+          type: string
+          format: date-time
+    MessageFailedPayload:
+      type: object
+      additionalProperties: false
+      required:
+        - message_id
+        - campaign_id
+        - channel
+        - attempt_number
+        - outcome
+        - retryable
+        - occurred_at
+      properties:
+        message_id:
+          type: string
+          format: uuid
+        campaign_id:
+          type: string
+          format: uuid
+        channel:
+          type: string
+          pattern: '^[a-z][a-z0-9_-]*$'
+        attempt_number:
+          type: integer
+          minimum: 1
+        outcome:
+          $ref: '#/components/schemas/FailureOutcome'
+        retryable:
+          type: boolean
+        error_code:
+          type: [string, "null"]
+        error_message:
+          type: [string, "null"]
+        occurred_at:
+          type: string
+          format: date-time
+    AuditActorType:
+      type: string
+      enum: [operator, administrator, system]
+    AuditOutcome:
+      type: string
+      enum: [success, failure]
+    AuditAction:
+      type: string
+      enum:
+        - campaign.created
+        - campaign.updated
+        - campaign.scheduled
+        - campaign.started
+        - campaign.completed
+        - campaign.cancelled
+        - campaign.failed
+        - template.created
+        - template.status.changed
+        - message.queued
+        - message.sent
+        - message.failed
+        - channel.config.updated
+        - audit.exported
+    AuditActorPayload:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type:
+          $ref: '#/components/schemas/AuditActorType'
+        identifier:
+          type: [string, "null"]
+          maxLength: 255
+    AuditEventPayload:
+      type: object
+      additionalProperties: false
+      required:
+        - event_id
+        - occurred_at
+        - service
+        - actor
+        - action
+        - entity_type
+        - entity_id
+        - outcome
+        - details
+        - correlation_id
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        occurred_at:
+          type: string
+          format: date-time
+        service:
+          type: string
+          maxLength: 64
+          examples: [notifications, scheduler, email_channel, audit_exporter]
+        actor:
+          $ref: '#/components/schemas/AuditActorPayload'
+        action:
+          $ref: '#/components/schemas/AuditAction'
+        entity_type:
+          type: string
+          maxLength: 64
+        entity_id:
+          type: string
+          maxLength: 255
+        campaign_id:
+          type: [string, "null"]
+          format: uuid
+        message_id:
+          type: [string, "null"]
+          format: uuid
+        channel:
+          type: [string, "null"]
+          pattern: '^[a-z][a-z0-9_-]*$'
+          maxLength: 64
+        outcome:
+          $ref: '#/components/schemas/AuditOutcome'
+        details:
+          type: object
+          additionalProperties:
+            type: string
+        correlation_id:
+          type: string
+          maxLength: 128
+        trace_id:
+          type: [string, "null"]
+          maxLength: 64

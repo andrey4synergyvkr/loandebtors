@@ -1,0 +1,352 @@
+openapi: 3.1.0
+info:
+  title: LoanDebtors Audit Exporter (Audit Export API)
+  version: 0.1.0
+  description: |
+    Read-only API выгрузки append-only журнала аудита. Изменение и удаление
+    записей запрещены (TC-7). Бизнес-операции записи через API не выполняются.
+
+    Журнал пополняется консьюмером очереди audit.events. Собственная выгрузка
+    журнала администратором фиксируется событием audit.exported. Это
+    единственный побочный эффект чтения: первая страница без курсора и запрос
+    записи по event_id создают событие аудита. Сервис не публикует
+    бизнес-события, поэтому outbox не используется.
+
+    Аутентификация и авторизация не выполняются (OC-2). API доступен только
+    из доверенного контура банка.
+servers:
+  - url: http://localhost:8004
+    description: Локальный учебный стенд
+tags:
+  - name: audit
+    description: Чтение журнала аудита
+  - name: system
+    description: Проверка работоспособности
+paths:
+  /health:
+    get:
+      tags: [system]
+      operationId: getHealth
+      summary: Проверить работоспособность сервиса
+      responses:
+        '200':
+          description: Сервис работает
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Сервис не готов принимать запросы
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /v1/audit-records:
+    get:
+      tags: [audit]
+      operationId: listAuditRecords
+      summary: Получить страницу журнала аудита
+      description: |
+        Записи возвращаются в порядке возрастания sequence. Для перехода к
+        следующей странице используется next_cursor из ответа.
+      parameters:
+        - $ref: '#/components/parameters/CampaignIdFilter'
+        - $ref: '#/components/parameters/ChannelFilter'
+        - $ref: '#/components/parameters/ActionFilter'
+        - $ref: '#/components/parameters/OccurredFrom'
+        - $ref: '#/components/parameters/OccurredTo'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Страница журнала
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditPage'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /v1/audit-records/{event_id}:
+    parameters:
+      - $ref: '#/components/parameters/EventIdPath'
+    get:
+      tags: [audit]
+      operationId: getAuditRecord
+      summary: Получить запись журнала по идентификатору события
+      responses:
+        '200':
+          description: Запись журнала
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditRecord'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+components:
+  parameters:
+    EventIdPath:
+      name: event_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CampaignIdFilter:
+      name: campaign_id
+      in: query
+      required: false
+      schema:
+        type: string
+        format: uuid
+    ChannelFilter:
+      name: channel
+      in: query
+      required: false
+      schema:
+        type: string
+        pattern: '^[a-z][a-z0-9_-]*$'
+        examples: [email]
+    ActionFilter:
+      name: action
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/AuditAction'
+    OccurredFrom:
+      name: occurred_from
+      in: query
+      required: false
+      schema:
+        type: string
+        format: date-time
+      description: Нижняя граница occurred_at, включительно
+    OccurredTo:
+      name: occurred_to
+      in: query
+      required: false
+      schema:
+        type: string
+        format: date-time
+      description: Верхняя граница occurred_at, не включительно
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+      description: Непрозрачный курсор следующей страницы
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 100
+  responses:
+    NotFound:
+      description: Запись не найдена
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    UnprocessableEntity:
+      description: Ошибка валидации запроса
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    InternalServerError:
+      description: Внутренняя ошибка сервиса
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    AuditActorType:
+      type: string
+      enum: [operator, administrator, system]
+    AuditOutcome:
+      type: string
+      enum: [success, failure]
+    AuditAction:
+      type: string
+      enum:
+        - campaign.created
+        - campaign.updated
+        - campaign.scheduled
+        - campaign.started
+        - campaign.completed
+        - campaign.cancelled
+        - campaign.failed
+        - template.created
+        - template.status.changed
+        - message.queued
+        - message.sent
+        - message.failed
+        - channel.config.updated
+        - audit.exported
+    AuditActor:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type:
+          $ref: '#/components/schemas/AuditActorType'
+        identifier:
+          type: [string, "null"]
+          maxLength: 255
+          description: Логин сотрудника или имя сервиса, если известны
+    AuditEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - event_id
+        - occurred_at
+        - service
+        - actor
+        - action
+        - entity_type
+        - entity_id
+        - outcome
+        - details
+        - correlation_id
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        occurred_at:
+          type: string
+          format: date-time
+        service:
+          type: string
+          maxLength: 64
+          description: Источник события
+          examples: [notifications, scheduler, email_channel, audit_exporter]
+        actor:
+          $ref: '#/components/schemas/AuditActor'
+        action:
+          $ref: '#/components/schemas/AuditAction'
+        entity_type:
+          type: string
+          maxLength: 64
+          description: Тип сущности, например campaign, message или channel
+        entity_id:
+          type: string
+          maxLength: 255
+        campaign_id:
+          type: [string, "null"]
+          format: uuid
+        message_id:
+          type: [string, "null"]
+          format: uuid
+        channel:
+          type: [string, "null"]
+          pattern: '^[a-z][a-z0-9_-]*$'
+          maxLength: 64
+        outcome:
+          $ref: '#/components/schemas/AuditOutcome'
+        details:
+          type: object
+          description: Дополнительные поля без персональных данных
+          additionalProperties:
+            type: string
+        correlation_id:
+          type: string
+          maxLength: 128
+        trace_id:
+          type: [string, "null"]
+          maxLength: 64
+    AuditRecord:
+      type: object
+      additionalProperties: false
+      required: [sequence, event, ingested_at]
+      properties:
+        sequence:
+          type: integer
+          minimum: 1
+          description: Порядковый номер записи, назначает хранилище
+        event:
+          $ref: '#/components/schemas/AuditEvent'
+        ingested_at:
+          type: string
+          format: date-time
+    AuditPage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditRecord'
+        next_cursor:
+          type: [string, "null"]
+          description: Курсор следующей страницы или null
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          examples: ['urn:loandebtors:error:validation']
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 100
+          maximum: 599
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri-reference
+        code:
+          type: string
+          description: Машинный код доменной ошибки
+    HealthStatus:
+      type: string
+      enum: [ok, degraded, unavailable]
+    HealthCheck:
+      type: object
+      additionalProperties: false
+      required: [name, status]
+      properties:
+        name:
+          type: string
+          examples: [application]
+        status:
+          $ref: '#/components/schemas/HealthStatus'
+        detail:
+          type: [string, "null"]
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status, service, version, uptime_seconds, checks]
+      properties:
+        status:
+          $ref: '#/components/schemas/HealthStatus'
+        service:
+          type: string
+          examples: [audit_exporter]
+        version:
+          type: string
+          examples: ['0.1.0']
+        uptime_seconds:
+          type: number
+          format: double
+          minimum: 0
+        checks:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/HealthCheck'

@@ -1,0 +1,99 @@
+openapi: 3.1.0
+info:
+  title: LoanDebtors Scheduler
+  version: 0.1.0
+  description: |
+    API сервиса Scheduler. Бизнес-интерфейса у планировщика нет: расписания
+    приходят командами campaign.scheduled и campaign.cancelled из RabbitMQ.
+    HTTP-слой отдает только проверку работоспособности сервиса и его зависимостей.
+
+    Аутентификация и авторизация не выполняются (OC-2). API доступен только
+    из доверенного контура банка. Контракт является источником истины для
+    реализации сервиса Scheduler.
+servers:
+  - url: http://localhost:8002
+    description: Локальный учебный стенд
+tags:
+  - name: system
+    description: Проверка работоспособности
+paths:
+  /health:
+    get:
+      tags: [system]
+      operationId: getHealth
+      summary: Проверить работоспособность сервиса
+      responses:
+        '200':
+          description: Сервис готов принимать запросы
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Сервис не готов принимать запросы
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+components:
+  schemas:
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          examples: ['urn:loandebtors:error:internal']
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 100
+          maximum: 599
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri-reference
+        code:
+          type: string
+          description: Машинный код ошибки
+    HealthStatus:
+      type: string
+      enum: [ok, degraded, unavailable]
+    HealthCheck:
+      type: object
+      additionalProperties: false
+      required: [name, status]
+      properties:
+        name:
+          type: string
+          examples: [application]
+        status:
+          $ref: '#/components/schemas/HealthStatus'
+        detail:
+          type: [string, "null"]
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status, service, version, uptime_seconds, checks]
+      properties:
+        status:
+          $ref: '#/components/schemas/HealthStatus'
+        service:
+          type: string
+          examples: [scheduler]
+        version:
+          type: string
+          examples: ['0.1.0']
+        uptime_seconds:
+          type: number
+          format: double
+          minimum: 0
+        checks:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/HealthCheck'

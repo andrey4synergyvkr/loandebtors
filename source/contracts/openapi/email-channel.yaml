@@ -1,0 +1,521 @@
+openapi: 3.1.0
+info:
+  title: LoanDebtors Email Channel (Admin Channel API)
+  version: 0.1.0
+  description: |
+    API администратора для настройки SMTP-адаптера и email-вариантов шаблонов.
+
+    Пароль SMTP передается ссылкой password_ref. Значение секрета через API не
+    возвращается и в домене не хранится. Аутентификация и авторизация не
+    выполняются (OC-2). API доступен только из доверенного контура банка.
+servers:
+  - url: http://localhost:8003
+    description: Локальный учебный стенд
+tags:
+  - name: channel
+    description: Настройки SMTP-адаптера
+  - name: templates
+    description: Email-варианты шаблонов
+  - name: system
+    description: Проверка работоспособности
+paths:
+  /health:
+    get:
+      tags: [system]
+      operationId: getHealth
+      summary: Проверить работоспособность сервиса
+      responses:
+        '200':
+          description: Сервис готов принимать запросы
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Сервис не готов принимать запросы
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /v1/config:
+    get:
+      tags: [channel]
+      operationId: getChannelConfig
+      summary: Получить настройки SMTP-адаптера
+      responses:
+        '200':
+          description: Текущие настройки
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SmtpConfigResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [channel]
+      operationId: updateChannelConfig
+      summary: Создать или обновить настройки SMTP-адаптера
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SmtpConfigRequest'
+            examples:
+              yandex:
+                summary: Настройки Яндекс.Почты
+                value:
+                  host: smtp.yandex.ru
+                  port: 587
+                  username: debtor-notifications@yandex.ru
+                  password_ref: SMTP_PASSWORD
+                  from_address: debtor-notifications@yandex.ru
+                  from_name: Банк
+                  use_starttls: true
+                  timeout_seconds: 30
+                  rate_limit_per_second: 10
+                  enabled: true
+      responses:
+        '200':
+          description: Настройки сохранены
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SmtpConfigResponse'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /v1/config/validate:
+    post:
+      tags: [channel]
+      operationId: validateChannelConfig
+      summary: Проверить настройки без сохранения
+      description: |
+        Проверяет обязательные поля и TCP-доступность SMTP-порта. Полная
+        SMTP-аутентификация и STARTTLS при проверке не выполняются. Настройки
+        в базе данных не изменяются.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SmtpConfigRequest'
+      responses:
+        '200':
+          description: Результат проверки
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResult'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/templates:
+    get:
+      tags: [templates]
+      operationId: listEmailTemplates
+      summary: Получить email-варианты шаблонов
+      parameters:
+        - $ref: '#/components/parameters/TemplateKeyFilter'
+        - $ref: '#/components/parameters/LocaleFilter'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Страница email-вариантов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailTemplateList'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /v1/templates/{template_key}/versions/{version}:
+    parameters:
+      - $ref: '#/components/parameters/TemplateKeyPath'
+      - $ref: '#/components/parameters/TemplateVersionPath'
+    get:
+      tags: [templates]
+      operationId: getEmailTemplate
+      summary: Получить email-вариант шаблона
+      parameters:
+        - $ref: '#/components/parameters/LocaleFilter'
+      responses:
+        '200':
+          description: Email-вариант шаблона
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailTemplateResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [templates]
+      operationId: upsertEmailTemplate
+      summary: Создать или обновить email-вариант шаблона
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailTemplateRequest'
+      responses:
+        '200':
+          description: Email-вариант сохранен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailTemplateResponse'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+components:
+  parameters:
+    TemplateKeyPath:
+      name: template_key
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/TemplateKey'
+    TemplateVersionPath:
+      name: version
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    TemplateKeyFilter:
+      name: template_key
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/TemplateKey'
+    LocaleFilter:
+      name: locale
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/Locale'
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    Offset:
+      name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+  responses:
+    NotFound:
+      description: Объект не найден
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    UnprocessableEntity:
+      description: Ошибка валидации запроса
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: Конфликт состояния или уникальности
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    InternalServerError:
+      description: Внутренняя ошибка сервиса
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    TemplateKey:
+      type: string
+      description: Логический ключ шаблона, общий с Notifications
+      pattern: '^[a-z][a-z0-9._-]*$'
+      minLength: 1
+      maxLength: 100
+    Locale:
+      type: string
+      description: Язык и регион в формате BCP 47
+      pattern: '^[a-z]{2}(-[A-Z]{2})?$'
+      examples: [ru-RU]
+    EmailAddress:
+      type: string
+      format: email
+      maxLength: 320
+    SecretRef:
+      type: string
+      description: Имя секрета, значение которого хранится вне домена
+      pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+      examples: [SMTP_PASSWORD]
+    SmtpConfigRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - host
+        - port
+        - username
+        - password_ref
+        - from_address
+        - from_name
+        - use_starttls
+        - timeout_seconds
+        - rate_limit_per_second
+        - enabled
+      properties:
+        host:
+          type: string
+          minLength: 1
+          maxLength: 255
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        username:
+          type: string
+          minLength: 1
+          maxLength: 255
+        password_ref:
+          $ref: '#/components/schemas/SecretRef'
+        from_address:
+          $ref: '#/components/schemas/EmailAddress'
+        from_name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        use_starttls:
+          type: boolean
+          description: Включает STARTTLS перед отправкой
+        timeout_seconds:
+          type: number
+          minimum: 1
+          maximum: 300
+        rate_limit_per_second:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        enabled:
+          type: boolean
+          description: Выключенный канал не принимает новые отправки
+    SmtpConfigResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - host
+        - port
+        - username
+        - password_ref
+        - from_address
+        - from_name
+        - use_starttls
+        - timeout_seconds
+        - rate_limit_per_second
+        - enabled
+        - updated_at
+      properties:
+        host:
+          type: string
+          minLength: 1
+          maxLength: 255
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        username:
+          type: string
+          minLength: 1
+          maxLength: 255
+        password_ref:
+          $ref: '#/components/schemas/SecretRef'
+        from_address:
+          $ref: '#/components/schemas/EmailAddress'
+        from_name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        use_starttls:
+          type: boolean
+        timeout_seconds:
+          type: number
+          minimum: 1
+          maximum: 300
+        rate_limit_per_second:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        enabled:
+          type: boolean
+        updated_at:
+          type: string
+          format: date-time
+    ValidationResult:
+      type: object
+      additionalProperties: false
+      required: [valid, errors, checked_at]
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: string
+        checked_at:
+          type: string
+          format: date-time
+    EmailTemplateRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - locale
+        - subject_template
+        - html_template
+        - plain_text_template
+        - required_variables
+      properties:
+        locale:
+          $ref: '#/components/schemas/Locale'
+        subject_template:
+          type: string
+          minLength: 1
+          description: Jinja2-шаблон темы
+        html_template:
+          type: string
+          minLength: 1
+          description: Jinja2-шаблон HTML-части
+        plain_text_template:
+          type: string
+          minLength: 1
+          description: Jinja2-шаблон текстовой части
+        required_variables:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+    EmailTemplateResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - key
+        - version
+        - locale
+        - subject_template
+        - html_template
+        - plain_text_template
+        - required_variables
+        - updated_at
+      properties:
+        key:
+          $ref: '#/components/schemas/TemplateKey'
+        version:
+          type: integer
+          minimum: 1
+        locale:
+          $ref: '#/components/schemas/Locale'
+        subject_template:
+          type: string
+          minLength: 1
+        html_template:
+          type: string
+          minLength: 1
+        plain_text_template:
+          type: string
+          minLength: 1
+        required_variables:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+        updated_at:
+          type: string
+          format: date-time
+    EmailTemplateList:
+      type: object
+      additionalProperties: false
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailTemplateResponse'
+        total:
+          type: integer
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+        offset:
+          type: integer
+          minimum: 0
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          examples: ['urn:loandebtors:error:validation']
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 100
+          maximum: 599
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri-reference
+        code:
+          type: string
+          description: Машинный код доменной ошибки
+    HealthStatus:
+      type: string
+      enum: [ok, degraded, unavailable]
+    HealthCheck:
+      type: object
+      additionalProperties: false
+      required: [name, status]
+      properties:
+        name:
+          type: string
+          examples: [application]
+        status:
+          $ref: '#/components/schemas/HealthStatus'
+        detail:
+          type: [string, "null"]
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status, service, version, uptime_seconds, checks]
+      properties:
+        status:
+          $ref: '#/components/schemas/HealthStatus'
+        service:
+          type: string
+          examples: [email_channel]
+        version:
+          type: string
+          examples: ['0.1.0']
+        uptime_seconds:
+          type: number
+          format: double
+          minimum: 0
+        checks:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/HealthCheck'

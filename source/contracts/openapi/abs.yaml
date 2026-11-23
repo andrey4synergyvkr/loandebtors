@@ -1,0 +1,301 @@
+openapi: 3.1.0
+info:
+  title: LoanDebtors ABS (Debtor Export API)
+  version: 0.1.0
+  description: |
+    Контракт внешней АБС для выгрузки портфеля должников методом pull.
+
+    Система LoanDebtors инициирует запросы, АБС не изменяется. Страницы
+    запрашиваются последовательно, первая страница имеет номер 1, выгрузка
+    продолжается до has_next=false. Частичная выборка не допускается.
+
+    На локальном стенде контракт реализует заглушка abs. Заглушка дополнительно
+    понимает заголовок X-Stub-Scenario для проверки веток ошибок; этот заголовок
+    не является частью контракта АБС.
+
+    Аутентификация на учебном стенде не выполняется, доступ только из
+    доверенного контура банка. Контракт является источником истины для
+    реализации адаптера АБС в сервисе Notifications.
+servers:
+  - url: http://localhost:9000
+    description: Локальный учебный стенд
+tags:
+  - name: debtors
+    description: Постраничная выгрузка должников
+  - name: system
+    description: Проверка работоспособности
+paths:
+  /health:
+    get:
+      tags: [system]
+      operationId: getHealth
+      summary: Проверить работоспособность заглушки
+      responses:
+        '200':
+          description: Заглушка готова принимать запросы
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Заглушка не готова принимать запросы
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /v1/debtors:
+    get:
+      tags: [debtors]
+      operationId: listDebtors
+      summary: Получить страницу должников
+      description: |
+        Возвращает одну страницу выборки. Должник попадает в выборку, если хотя
+        бы одна его задолженность удовлетворяет min_days_overdue и
+        max_days_overdue, а контакт соответствует channel. Неизвестные
+        query-параметры игнорируются для совместимости с будущими критериями.
+
+        total означает число должников по всей выборке, а не размер страницы.
+        Порядок должников стабильный, по возрастанию debtor_id.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/MinDaysOverdue'
+        - $ref: '#/components/parameters/MaxDaysOverdue'
+        - $ref: '#/components/parameters/Channel'
+      responses:
+        '200':
+          description: Страница выборки должников
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AbsDebtorPage'
+        '400':
+          description: Некорректный запрос или неизвестный сценарий заглушки
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: Некорректные параметры запроса
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '500':
+          description: Внутренняя ошибка АБС
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          description: АБС недоступна
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+components:
+  parameters:
+    Page:
+      name: page
+      in: query
+      required: false
+      description: Номер страницы, первая страница имеет номер 1
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      name: page_size
+      in: query
+      required: false
+      description: Размер страницы выгрузки
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 500
+    MinDaysOverdue:
+      name: min_days_overdue
+      in: query
+      required: false
+      description: Минимальное число дней просрочки для попадания в выборку
+      schema:
+        type: integer
+        minimum: 0
+    MaxDaysOverdue:
+      name: max_days_overdue
+      in: query
+      required: false
+      description: Максимальное число дней просрочки для попадания в выборку
+      schema:
+        type: integer
+        minimum: 0
+    Channel:
+      name: channel
+      in: query
+      required: false
+      description: Канал, по которому у должника должен быть контакт
+      schema:
+        $ref: '#/components/schemas/Channel'
+  schemas:
+    Channel:
+      type: string
+      description: Код канала доставки
+      pattern: '^[a-z][a-z0-9_-]*$'
+      examples: [email]
+    Money:
+      type: object
+      additionalProperties: false
+      required: [amount, currency]
+      properties:
+        amount:
+          type: string
+          description: Сумма в основных единицах валюты
+          pattern: '^\d+(\.\d{1,2})?$'
+          examples: ['152340.50']
+        currency:
+          type: string
+          description: Код валюты ISO 4217
+          pattern: '^[A-Z]{3}$'
+          examples: [RUB]
+    DebtorContact:
+      type: object
+      additionalProperties: false
+      required: [channel, address, is_primary]
+      properties:
+        channel:
+          $ref: '#/components/schemas/Channel'
+        address:
+          type: string
+          minLength: 1
+          description: Адрес в формате канала
+          examples: [debtor@example.test]
+        is_primary:
+          type: boolean
+          description: Основной контакт для этого канала
+    DebtSummary:
+      type: object
+      additionalProperties: false
+      required: [contract_id, amount, due_date, days_overdue]
+      properties:
+        contract_id:
+          type: string
+          minLength: 1
+          description: Номер кредитного договора из АБС
+          examples: [CR-2024-0001]
+        amount:
+          $ref: '#/components/schemas/Money'
+        due_date:
+          type: string
+          format: date
+          description: Плановая дата погашения
+          examples: ['2024-11-01']
+        days_overdue:
+          type: integer
+          minimum: 0
+          description: Количество дней просрочки на момент выгрузки
+          examples: [45]
+    AbsDebtor:
+      type: object
+      additionalProperties: false
+      required: [debtor_id, full_name, contacts, debts]
+      properties:
+        debtor_id:
+          type: string
+          minLength: 1
+          description: Непрозрачный идентификатор должника в АБС
+          examples: [ABS-100001]
+        full_name:
+          type: string
+          minLength: 1
+          description: Имя для персонализации, в аудит не пишется
+          examples: ['Иванов Иван Иванович']
+        contacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/DebtorContact'
+        debts:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/DebtSummary'
+    AbsDebtorPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, total, has_next]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AbsDebtor'
+        page:
+          type: integer
+          minimum: 1
+          description: Номер страницы, первая страница имеет номер 1
+        total:
+          type: integer
+          minimum: 0
+          description: Общее число должников по выборке
+        has_next:
+          type: boolean
+          description: Признак наличия следующей страницы
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          examples: ['urn:loandebtors:error:abs-unavailable']
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 100
+          maximum: 599
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri-reference
+        code:
+          type: string
+          description: Машинный код ошибки
+    HealthStatus:
+      type: string
+      enum: [ok, degraded, unavailable]
+    HealthCheck:
+      type: object
+      additionalProperties: false
+      required: [name, status]
+      properties:
+        name:
+          type: string
+          examples: [application]
+        status:
+          $ref: '#/components/schemas/HealthStatus'
+        detail:
+          type: [string, 'null']
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status, service, version, uptime_seconds, checks]
+      properties:
+        status:
+          $ref: '#/components/schemas/HealthStatus'
+        service:
+          type: string
+          examples: [abs]
+        version:
+          type: string
+          examples: ['0.1.0']
+        uptime_seconds:
+          type: number
+          format: double
+          minimum: 0
+        checks:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/HealthCheck'
