@@ -1,0 +1,43 @@
+@startuml
+!include <C4/C4_Sequence>
+
+caption "Сценарий 6.2. Полная выгрузка должников из АБС"
+autonumber
+
+ContainerQueue(queue, "RabbitMQ", "Очереди команд и событий")
+Container(notifications, "Notifications", "Python, FastAPI", "Ядро системы")
+System_Ext(abs, "АБС", "Источник должников и контактов")
+ContainerDb(db, "Storage", "PostgreSQL", "Схема notification")
+
+Rel(queue, notifications, "campaign.start", "AMQP")
+note over notifications
+  Проверяет статус кампании
+  и messages_created_at
+end note
+
+group Постраничная выгрузка
+  loop Пока has_next = true
+    Rel(notifications, abs, "GET /v1/debtors?page=N", "REST/JSON")
+    Rel(abs, notifications, "Страница, total и has_next", "REST/JSON")
+  end
+  note over notifications
+    Проверяет номер страницы,
+    неизменность total, дубли
+    и лимит 10 000 должников
+  end note
+end
+
+group Транзакция создания сообщений
+  Rel(notifications, db, "Advisory-блокировка кампании", "SQL")
+  Rel(notifications, db, "Снимки, сообщения, message.send и audit", "SQL")
+end
+
+alt Выборка полная
+  Rel(notifications, queue, "message.send через outbox relay", "AMQP")
+else Временная ошибка АБС
+  Rel(notifications, queue, "nack, повтор через retry-очередь", "AMQP")
+else Постоянная ошибка или неполная выборка
+  Rel(notifications, db, "Кампания failed и campaign.failed", "SQL")
+end
+
+@enduml

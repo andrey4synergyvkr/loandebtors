@@ -1,0 +1,40 @@
+@startuml
+!include <C4/C4_Sequence>
+
+caption "Сценарий 6.7. Восстановление после сбоя"
+autonumber
+
+Container(notifications, "Notifications", "Python, FastAPI", "Ядро системы")
+Container(scheduler, "Scheduler", "Python, APScheduler", "Планировщик")
+Container(email, "Email Channel", "Python, aio-pika", "SMTP-адаптер")
+ContainerQueue(queue, "RabbitMQ", "Очереди команд и результатов")
+ContainerDb(db, "Storage", "PostgreSQL", "Схемы сервисов")
+
+group Notifications: обслуживание
+  Rel(notifications, db, "Retention outbox и попыток", "SQL")
+  Rel(notifications, db, "Сообщения с наступившим next_attempt_at", "SQL")
+  Rel(notifications, db, "message.send в outbox", "SQL")
+  Rel(notifications, db, "running-кампании без сообщений, campaign.start в outbox", "SQL")
+  Rel(notifications, db, "Исчерпанные message.send, статус failed и audit", "SQL")
+  Rel(notifications, db, "Завершение кампаний без незавершенных сообщений", "SQL")
+  Rel(notifications, queue, "message.send и campaign.start через outbox relay", "AMQP")
+end
+
+group Scheduler: восстановление расписаний
+  Rel(scheduler, db, "list_active и проверка cancelled_campaign", "SQL")
+  note over scheduler: Регистрирует задания APScheduler из campaign_schedule
+  Rel(scheduler, db, "next_run_at", "SQL")
+end
+
+group Переподключение consumer
+  Rel(notifications, queue, "Переподписка на notification.commands и notification.results", "AMQP")
+  Rel(scheduler, queue, "Переподписка на scheduler.commands", "AMQP")
+  Rel(email, queue, "Переподключение к email.commands", "AMQP")
+end
+
+note over notifications
+  Итерация обслуживания выполняется в одной транзакции.
+  Повторная обработка идемпотентна
+end note
+
+@enduml

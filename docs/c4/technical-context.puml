@@ -1,0 +1,7 @@
+@startuml
+!include <C4/C4_Context>
+SHOW_PERSON_PORTRAIT()
+
+caption "Диаграмма технического контекста"
+
+@enduml

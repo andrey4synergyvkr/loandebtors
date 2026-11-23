@@ -1,0 +1,51 @@
+@startuml
+!include <C4/C4_Container>
+SHOW_PERSON_PORTRAIT()
+
+caption "Диаграмма контейнеров"
+
+Person(operator, "Оператор кампании", "Управляет кампаниями через HTTP API")
+Person(admin, "Администратор", "Настраивает адаптеры каналов и выгружает журнал аудита")
+
+System_Boundary(loanDebtors, "LoanDebtors") {
+    Container(notifications, "Notifications", "Python, FastAPI", "Кампании, выборка должников, контроль доставки оповещений")
+    Container(scheduler, "Scheduler", "Python, APScheduler", "Планирование запуска кампаний по расписанию")
+    Container(auditExporter, "Audit Exporter", "Python, FastAPI", "Приём audit-событий, append-only журнал и read-only выгрузка")
+    ContainerDb(db, "Storage", "PostgreSQL", "Кампании, сообщения, настройки каналов и аудит в отдельных схемах")
+    ContainerQueue(queue, "Notifications Queue", "RabbitMQ")
+    Container(smtpAdapter, "SMTP Adapter", "Python, aio-pika, SMTP, Jinja2", "Рендеринг email-шаблона, отправка писем через провайдера и статусы доставки")
+}
+
+System_Ext(abs, "АБС", "Источник данных по должникам и контактам")
+
+Boundary(internet, "Internet") {
+    System_Ext(emailProvider, "Почтовый провайдер", "Внешний сервис доставки электронной почты")
+}
+
+Rel_U(operator, notifications, "Управляет кампаниями", "HTTPS/REST, JSON, OpenAPI")
+Rel_L(notifications, abs, "Получает список должников и их контакты (постранично)", "HTTPS/REST, JSON")
+Rel_D(notifications, db, "Контакты должников, outbox audit-событий", "SQL")
+BiRel_U(notifications, queue, "out:\n NotificationCommand / in:\n Статусы доставки", "AMQP")
+
+Rel(admin, smtpAdapter, "Настраивает адаптер канала", "HTTPS/REST, JSON, OpenAPI")
+Rel_L(admin, auditExporter, "Выгружает журнал аудита", "HTTPS/REST, JSON, read-only")
+
+
+BiRel_U(scheduler, queue, "in:\n campaign.scheduled, campaign.cancelled / out:\n campaign.start", "AMQP")
+Rel_D(scheduler, db, "Расписание, состояние запусков и outbox audit-событий", "SQL")
+
+BiRel_U(smtpAdapter, queue, "in:\n Запрос на отправку: template_key и переменные /\n out:\n статусы доставки", "AMQP")
+Rel_R(smtpAdapter, emailProvider, "Отправляет письма", "SMTP, STARTTLS")
+Rel_D(smtpAdapter, db, "Настройки, email-шаблоны и outbox audit-событий", "SQL")
+
+Rel_U(auditExporter, db, "Пишет и читает audit-схему", "SQL")
+Rel_D(queue, auditExporter, "audit.event", "AMQP")
+
+Lay_R(abs, operator)
+
+note as n
+  Связь с телеметрией не указана намеренно, чтобы не усложнять диаграмму.
+  Каждый сервис самостоятельно отдает телеметрию в систему Monitoring.
+end note
+
+@enduml

@@ -1,0 +1,81 @@
+[project]
+name = "loandebtors-workspace"
+version = "0.1.0"
+description = "LoanDebtors: монорепозиторий сервисов уведомления должников"
+requires-python = ">=3.12"
+readme = "README.md"
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["source/services/*"]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28",
+    "httpx2>=2.16",
+    "mypy>=1.14",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "pytest-bdd>=8.1",
+    "pyyaml>=6.0",
+    "ruff>=0.9",
+    "testcontainers>=4.9",
+    "types-pyyaml>=6.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["source/services"]
+addopts = "-ra -m 'not integration'"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "bdd: Gherkin-сценарии",
+    "integration: тесты, которым нужны PostgreSQL, RabbitMQ или Mailpit",
+    "e2e: сквозные тесты на полном Docker-стенде",
+]
+pythonpath = [
+    "source/services/notifications/src",
+    "source/services/scheduler/src",
+    "source/services/email_channel/src",
+    "source/services/audit_exporter/src",
+    "source/services/abs/src",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+src = [
+    "source/services/notifications/src",
+    "source/services/scheduler/src",
+    "source/services/email_channel/src",
+    "source/services/audit_exporter/src",
+    "source/services/abs/src",
+]
+extend-exclude = ["source/services/*/migrations"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC", "RUF"]
+# Русский текст в docstring и комментариях: кириллица не является опечаткой.
+allowed-confusables = [
+    "А", "Б", "В", "Г", "Д", "Е", "Ё", "Ж", "З", "И", "Й", "К", "Л", "М", "Н", "О", "П", "Р", "С", "Т", "У", "Ф", "Х", "Ц", "Ч", "Ш", "Щ", "Ъ", "Ы", "Ь", "Э", "Ю", "Я",
+    "а", "б", "в", "г", "д", "е", "ё", "ж", "з", "и", "й", "к", "л", "м", "н", "о", "п", "р", "с", "т", "у", "ф", "х", "ц", "ч", "ш", "щ", "ъ", "ы", "ь", "э", "ю", "я",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["notifications", "scheduler", "email_channel", "audit_exporter", "abs"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+exclude = ["source/services/[^/]+/migrations"]
+
+[[tool.mypy.overrides]]
+module = ["punq", "apscheduler.*", "abs.*", "asyncpg.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["*.tests.*"]
+disallow_untyped_decorators = false

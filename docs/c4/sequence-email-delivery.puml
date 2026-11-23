@@ -1,0 +1,30 @@
+@startuml
+!include <C4/C4_Sequence>
+
+caption "Сценарий 6.5. Доставка письма через Email Channel"
+autonumber
+
+ContainerQueue(queue, "RabbitMQ", "Очереди команд и результатов")
+Container(email, "Email Channel", "Python, aio-pika, Jinja2", "SMTP-адаптер")
+ContainerDb(db, "Storage", "PostgreSQL", "Схема email_channel")
+System_Ext(provider, "Почтовый провайдер", "SMTP, STARTTLS")
+
+Rel(queue, email, "message.send из email.commands", "AMQP")
+Rel(email, db, "Проверка processed_messages", "SQL")
+
+alt Сообщение уже обработано
+  Rel(email, queue, "ack как дубль", "AMQP")
+else Новая команда
+  Rel(email, db, "Настройки, шаблон и номер попытки", "SQL")
+  note over email: Рендеринг Jinja2 и rate limit
+  Rel(email, provider, "SMTP-отправка письма", "SMTP")
+  Rel(provider, email, "Результат или код ошибки", "SMTP")
+  note over email, provider
+    5xx и отказ получателя: permanent
+    4xx, сеть и таймаут: transient
+  end note
+  Rel(email, db, "Попытка, processed, message.sent/failed и audit", "SQL")
+  Rel(email, queue, "message.sent/failed в notification.results через outbox relay", "AMQP")
+end
+
+@enduml

@@ -1,0 +1,33 @@
+@startuml
+!include <C4/C4_Context>
+SHOW_PERSON_PORTRAIT()
+
+caption "Диаграмма системного контекста"
+
+Boundary(bank, "Bank") {
+    Person(operator, "Оператор кампании", "Сотрудник банка, инициирует рассылку через API")
+    Person(admin, "Администратор", "Настраивает адаптеры каналов и выгружает журнал аудита")
+    Person(devops, "Эксплуатация / DevOps", "Проверяет <<здоровье>> и анализирует телеметрию")
+
+    System(loanDebtors, "LoanDebtors", "Система уведомлений должников: кампании, отправка, аудит и телеметрия")
+
+    System_Ext(abs, "АБС", "Источник данных по должникам и их контактным данным")
+    System_Ext(monitoring, "Мониторинг", "Принимает метрики и трассировки запросов")
+}
+
+Boundary(internet, "Internet") {
+    System_Ext(emailProvider, "Почтовый провайдер", "Внешний публичный сервис доставки электронной почты")
+}
+
+Person_Ext(debtor, "Должник", "Получает уведомления о необходимости погашения")
+
+Rel(operator, loanDebtors, "Управляет кампаниями", "HTTPS/REST")
+Rel_L(loanDebtors, abs, "Получает список должников и их контакты", "REST/JSON, pull")
+Rel(loanDebtors, emailProvider, "Отправляет письма и получает коды ошибок", "SMTP, STARTTLS")
+Rel_D(emailProvider, debtor, "Доставляет уведомления", "email")
+Rel(admin, loanDebtors, "Настраивает адаптер канала", "HTTPS/REST")
+Rel(admin, loanDebtors, "Выгружает журнал аудита", "HTTPS/REST, read-only")
+Rel_R(loanDebtors, monitoring, "Экспортирует метрики и трейсы", "OTLP")
+Rel_L(devops, monitoring, "Анализирует телеметрию", "UI/API")
+
+@enduml

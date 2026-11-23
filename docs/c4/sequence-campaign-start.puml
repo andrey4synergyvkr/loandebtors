@@ -1,0 +1,45 @@
+@startuml
+!include <C4/C4_Sequence>
+
+caption "Сценарий 6.3. Немедленный запуск кампании"
+autonumber
+
+Person(operator, "Оператор")
+Container(notifications, "Notifications", "Python, FastAPI", "Ядро системы")
+ContainerQueue(queue, "RabbitMQ", "Очереди команд и событий")
+ContainerDb(db, "Storage", "PostgreSQL", "Схема notification")
+System_Ext(abs, "АБС", "Источник должников")
+
+note over notifications
+  Кампания должна быть в draft.
+  Иначе API возвращает 409
+end note
+
+Rel(operator, notifications, "POST /v1/campaigns/{id}/start", "HTTPS")
+
+group Транзакция запуска
+  Rel(notifications, db, "Статус running, campaign.start и campaign.started", "SQL")
+end
+
+Rel(notifications, operator, "202 Accepted", "HTTPS")
+Rel(notifications, queue, "campaign.start в notification.commands через outbox relay", "AMQP")
+
+note over notifications: Consumer notification.commands
+
+Rel(queue, notifications, "campaign.start", "AMQP")
+
+group Выгрузка и создание сообщений
+  Rel(notifications, abs, "GET /v1/debtors по страницам", "REST/JSON")
+  Rel(abs, notifications, "Страницы, total и has_next", "REST/JSON")
+  note over notifications: Полная выгрузка по сценарию 6.2
+  Rel(notifications, db, "Снимки, сообщения, message.send и audit", "SQL")
+end
+
+Rel(notifications, queue, "message.send в email.commands через outbox relay", "AMQP")
+
+note over notifications
+  Временная ошибка АБС возвращает команду
+  в retry-очередь. Ошибка контракта уходит в DLQ
+end note
+
+@enduml

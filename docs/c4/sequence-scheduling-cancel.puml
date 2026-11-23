@@ -1,0 +1,54 @@
+@startuml
+!include <C4/C4_Sequence>
+
+caption "Сценарий 6.4. Планирование, срабатывание и отмена кампании"
+autonumber
+
+Person(operator, "Оператор")
+Container(notifications, "Notifications", "Python, FastAPI", "Ядро системы")
+ContainerQueue(queue, "RabbitMQ", "Очереди команд")
+Container(scheduler, "Scheduler", "Python, APScheduler", "Планировщик")
+ContainerDb(db, "Storage", "PostgreSQL", "Схемы notification и scheduler")
+
+group Постановка в расписание
+  Rel(operator, notifications, "POST /v1/campaigns/{id}/schedule", "HTTPS")
+  Rel(notifications, db, "Статус scheduled, campaign.scheduled и audit", "SQL")
+  Rel(notifications, operator, "202 Accepted", "HTTPS")
+  Rel(notifications, queue, "campaign.scheduled в scheduler.commands через outbox relay", "AMQP")
+  Rel(queue, scheduler, "campaign.scheduled", "AMQP")
+  Rel(scheduler, db, "Проверка cancelled_campaign и campaign_schedule", "SQL")
+  note over scheduler: Регистрирует задание APScheduler в памяти
+  Rel(scheduler, db, "next_run_at и audit campaign.scheduled", "SQL")
+end
+
+group Срабатывание задания
+  note over scheduler: APScheduler вызывает задание в run_at
+  Rel(scheduler, db, "Проверка cancelled_campaign и mark_triggered", "SQL")
+  Rel(scheduler, db, "campaign.start, campaign.started и next_run_at", "SQL")
+  Rel(scheduler, queue, "campaign.start в notification.commands через outbox relay", "AMQP")
+  Rel(queue, notifications, "campaign.start", "AMQP")
+end
+
+group Отмена запланированной кампании
+  Rel(operator, notifications, "POST /v1/campaigns/{id}/cancel", "HTTPS")
+  Rel(notifications, db, "Статус cancelled, campaign.cancelled и audit", "SQL")
+  Rel(notifications, operator, "202 Accepted", "HTTPS")
+  Rel(notifications, queue, "campaign.cancelled в scheduler.commands через outbox relay", "AMQP")
+  Rel(queue, scheduler, "campaign.cancelled", "AMQP")
+  Rel(scheduler, db, "Отметка cancelled_campaign и расписание cancelled", "SQL")
+  note over scheduler: Снимает задание APScheduler
+end
+
+note over scheduler
+  Отметка cancelled_campaign проверяется
+  до и после регистрации, при срабатывании
+  и при восстановлении расписаний
+end note
+
+note over notifications
+  Для running-кампании сообщения pending и queued
+  переводятся в cancelled. Событие campaign.cancelled
+  в Scheduler не публикуется
+end note
+
+@enduml

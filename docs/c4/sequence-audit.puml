@@ -1,0 +1,39 @@
+@startuml
+!include <C4/C4_Sequence>
+
+caption "Сценарий 6.8. Запись и выгрузка журнала аудита"
+autonumber
+
+Person(admin, "Администратор")
+Container(notifications, "Notifications", "Python, FastAPI", "Ядро системы")
+Container(scheduler, "Scheduler", "Python, APScheduler", "Планировщик")
+Container(email, "Email Channel", "Python, aio-pika", "SMTP-адаптер")
+ContainerQueue(queue, "RabbitMQ", "Очередь audit.events")
+Container(audit, "Audit Exporter", "Python, FastAPI", "Журнал аудита")
+ContainerDb(db, "Storage", "PostgreSQL", "Схемы сервисов и audit")
+
+group Запись audit.event
+  Rel(notifications, db, "audit.event в outbox в транзакции", "SQL")
+  Rel(scheduler, db, "audit.event в outbox в транзакции", "SQL")
+  Rel(email, db, "audit.event в outbox в транзакции", "SQL")
+  Rel(notifications, queue, "audit.event через outbox relay", "AMQP")
+  Rel(scheduler, queue, "audit.event через outbox relay", "AMQP")
+  Rel(email, queue, "audit.event через outbox relay", "AMQP")
+  Rel(queue, audit, "audit.event", "AMQP")
+  Rel(audit, db, "append в audit_record, ON CONFLICT по event_id", "SQL")
+end
+
+group Выгрузка журнала
+  Rel(admin, audit, "GET /v1/audit-records", "HTTPS")
+  Rel(audit, db, "Запрос с фильтрами и курсором", "SQL")
+  Rel(audit, db, "audit.exported на первой странице", "SQL")
+  Rel(audit, admin, "Страница и next_cursor", "HTTPS")
+end
+
+note over audit
+  Повтор по event_id идемпотентен.
+  Конфликт содержимого и ошибка валидации уходят в DLQ.
+  UPDATE, DELETE и TRUNCATE запрещены триггерами
+end note
+
+@enduml

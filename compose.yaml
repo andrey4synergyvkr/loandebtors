@@ -1,0 +1,4 @@
+name: loandebtors
+
+include:
+  - path: source/infra/compose.yaml

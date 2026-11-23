@@ -1,0 +1,39 @@
+@startuml
+!include <C4/C4_Sequence>
+
+caption "Сценарий 6.6. Результат отправки, повтор и завершение кампании"
+autonumber
+
+ContainerQueue(queue, "RabbitMQ", "Очереди результатов и команд")
+Container(notifications, "Notifications", "Python, FastAPI", "Ядро системы")
+ContainerDb(db, "Storage", "PostgreSQL", "Схема notification")
+
+Rel(queue, notifications, "message.sent или message.failed из notification.results", "AMQP")
+Rel(notifications, db, "Загрузка сообщения и проверка дубля", "SQL")
+
+alt message.sent
+  Rel(notifications, db, "Статус sent, попытка и message.sent", "SQL")
+else retryable message.failed
+  Rel(notifications, db, "Статус queued, next_attempt_at и audit", "SQL")
+  Rel(notifications, db, "Отложенный message.send в outbox", "SQL")
+  Rel(notifications, queue, "message.send в email.commands через outbox relay", "AMQP")
+else permanent message.failed
+  Rel(notifications, db, "Статус failed, попытка и audit", "SQL")
+end
+
+group Завершение кампании
+  Rel(notifications, db, "count незавершенных сообщений", "SQL")
+  alt Все сообщения терминальные
+    Rel(notifications, db, "complete_if_running и campaign.completed", "SQL")
+  else Есть незавершенные
+    note over notifications: Кампания остается в running
+  end
+end
+
+note over notifications
+  Повторный или устаревший результат,
+  а также результат по cancelled-сообщению
+  игнорируется
+end note
+
+@enduml
