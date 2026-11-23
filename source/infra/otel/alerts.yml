@@ -1,0 +1,51 @@
+groups:
+  - name: loandebtors-notifications
+    rules:
+      - alert: NotificationsDown
+        expr: up{job="notifications"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Notifications недоступен
+          description: Prometheus не может опросить метрики Notifications более 2 минут.
+      - alert: NotificationsConsumerFailures
+        expr: sum(rate(loandebtors_notifications_consumer_failures_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Ошибки consumer Notifications
+          description: Consumer стабильно возвращает ошибки обработки сообщений.
+      - alert: NotificationsDeadLetters
+        expr: sum(increase(loandebtors_notifications_consumer_dead_lettered_total[10m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Сообщения в DLQ Notifications
+          description: За последние 10 минут появились сообщения в dead-letter очереди.
+      - alert: NotificationsOutboxFailures
+        expr: sum(rate(loandebtors_notifications_outbox_failures_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Ошибки публикации outbox Notifications
+          description: Outbox relay не может опубликовать сообщения в RabbitMQ.
+      - alert: NotificationsRecoveryRequeues
+        expr: sum(increase(loandebtors_notifications_maintenance_requeued_total[15m])) > 0
+        for: 1m
+        labels:
+          severity: info
+        annotations:
+          summary: Восстановление зависших состояний
+          description: Фоновое обслуживание повторно поставило в очередь сообщения или кампании.
+      - alert: NotificationsOutboxExhausted
+        expr: sum(increase(loandebtors_notifications_maintenance_exhausted_total[15m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Публикация message.send исчерпала попытки
+          description: Обслуживание закрыло сообщения после отказа outbox опубликовать команду.

@@ -1,0 +1,308 @@
+name: loandebtors
+
+x-service-environment: &service-environment
+  ENVIRONMENT: ${ENVIRONMENT:-local}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-loandebtors}:${POSTGRES_PASSWORD:-loandebtors}@postgres:5432/${POSTGRES_DB:-loandebtors}
+  RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-loandebtors}:${RABBITMQ_DEFAULT_PASS:-loandebtors}@rabbitmq:5672/
+  RABBITMQ_PREFETCH_COUNT: ${RABBITMQ_PREFETCH_COUNT:-50}
+  RABBITMQ_RETRY_TTL_SECONDS: ${RABBITMQ_RETRY_TTL_SECONDS:-60}
+  RABBITMQ_RETRY_MAX_ATTEMPTS: ${RABBITMQ_RETRY_MAX_ATTEMPTS:-10}
+  OTLP_ENDPOINT: http://otel-collector:4317
+  OTEL_ENABLED: "true"
+  OTEL_LOGS_ENABLED: "true"
+  OTEL_INSECURE: "true"
+  OTEL_SAMPLE_RATIO: ${OTEL_SAMPLE_RATIO:-1.0}
+  OTEL_EXPORT_INTERVAL_SECONDS: ${OTEL_EXPORT_INTERVAL_SECONDS:-10}
+  ACCESS_LOG_HEALTH_ENABLED: "false"
+  CHECK_DEPENDENCIES: "true"
+  RUN_BACKGROUND_WORKERS: "true"
+  HEALTH_CHECK_TIMEOUT_SECONDS: ${HEALTH_CHECK_TIMEOUT_SECONDS:-5}
+  OUTBOX_POLL_INTERVAL_SECONDS: ${OUTBOX_POLL_INTERVAL_SECONDS:-1}
+  OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-100}
+  OUTBOX_MAX_ATTEMPTS: ${OUTBOX_MAX_ATTEMPTS:-10}
+  OUTBOX_RETRY_BASE_SECONDS: ${OUTBOX_RETRY_BASE_SECONDS:-1}
+  OUTBOX_RETRY_MAX_SECONDS: ${OUTBOX_RETRY_MAX_SECONDS:-60}
+  OUTBOX_HEALTH_MAX_AGE_SECONDS: ${OUTBOX_HEALTH_MAX_AGE_SECONDS:-30}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-loandebtors}
+      POSTGRES_USER: ${POSTGRES_USER:-loandebtors}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-loandebtors}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-loandebtors}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-loandebtors}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.165.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel/collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8888:8888"
+      - "8889:8889"
+    depends_on:
+      - tempo
+      - loki
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./otel/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200"
+
+  loki:
+    image: grafana/loki:3.4.2
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    volumes:
+      - ./loki/loki.yaml:/etc/loki/loki.yaml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./otel/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./otel/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - otel-collector
+
+  grafana:
+    image: grafana/grafana:11.5.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - tempo
+
+  abs:
+    build:
+      context: ../..
+      dockerfile: source/infra/docker/service.Dockerfile
+      args:
+        DISTRIBUTION: loandebtors-abs
+        SERVICE: abs
+        PORT: 9000
+    command: ["uvicorn", "abs.main:app", "--host", "0.0.0.0", "--port", "9000"]
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_ENABLED: "true"
+      OTEL_LOGS_ENABLED: "true"
+      OTEL_INSECURE: "true"
+      OTEL_SAMPLE_RATIO: ${OTEL_SAMPLE_RATIO:-1.0}
+      OTEL_EXPORT_INTERVAL_SECONDS: ${OTEL_EXPORT_INTERVAL_SECONDS:-10}
+      ACCESS_LOG_HEALTH_ENABLED: "false"
+      ABS_STUB_TIMEOUT_SECONDS: ${ABS_STUB_TIMEOUT_SECONDS:-35}
+    ports:
+      - "9000:9000"
+    depends_on:
+      otel-collector:
+        condition: service_started
+    stop_grace_period: 10s
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/health', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  notifications:
+    build:
+      context: ../..
+      dockerfile: source/infra/docker/service.Dockerfile
+      args:
+        DISTRIBUTION: loandebtors-notifications
+        SERVICE: notifications
+        PORT: 8001
+    environment:
+      <<: *service-environment
+      ABS_BASE_URL: ${ABS_BASE_URL:-http://abs:9000}
+      ABS_MAX_ATTEMPTS: ${ABS_MAX_ATTEMPTS:-3}
+      ABS_RETRY_BASE_SECONDS: ${ABS_RETRY_BASE_SECONDS:-0.5}
+      DEBTOR_PAGE_SIZE: ${DEBTOR_PAGE_SIZE:-500}
+      DEBTOR_SELECTION_MAX_TOTAL: ${DEBTOR_SELECTION_MAX_TOTAL:-10000}
+      MESSAGE_MAX_ATTEMPTS: ${MESSAGE_MAX_ATTEMPTS:-3}
+      MESSAGE_RETRY_BASE_SECONDS: ${MESSAGE_RETRY_BASE_SECONDS:-30}
+      MESSAGE_RETRY_MAX_SECONDS: ${MESSAGE_RETRY_MAX_SECONDS:-3600}
+      RETENTION_DAYS: ${RETENTION_DAYS:-30}
+      MAINTENANCE_INTERVAL_SECONDS: ${MAINTENANCE_INTERVAL_SECONDS:-3600}
+      MAINTENANCE_BATCH_SIZE: ${MAINTENANCE_BATCH_SIZE:-100}
+      MAINTENANCE_HEALTH_MAX_AGE_SECONDS: ${MAINTENANCE_HEALTH_MAX_AGE_SECONDS:-7200}
+      RECOVERY_GRACE_SECONDS: ${RECOVERY_GRACE_SECONDS:-300}
+      RABBITMQ_PREFETCH_COUNT: ${RABBITMQ_PREFETCH_COUNT:-50}
+      RABBITMQ_RETRY_TTL_SECONDS: ${RABBITMQ_RETRY_TTL_SECONDS:-60}
+      RABBITMQ_RETRY_MAX_ATTEMPTS: ${RABBITMQ_RETRY_MAX_ATTEMPTS:-10}
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  scheduler:
+    build:
+      context: ../..
+      dockerfile: source/infra/docker/service.Dockerfile
+      args:
+        DISTRIBUTION: loandebtors-scheduler
+        SERVICE: scheduler
+        PORT: 8002
+    environment:
+      <<: *service-environment
+      SCHEDULE_TIMEZONE: ${SCHEDULE_TIMEZONE:-Europe/Moscow}
+      SCHEDULE_MISFIRE_GRACE_SECONDS: ${SCHEDULE_MISFIRE_GRACE_SECONDS:-60}
+      SCHEDULE_COALESCE: ${SCHEDULE_COALESCE:-true}
+      RABBITMQ_PREFETCH_COUNT: ${RABBITMQ_PREFETCH_COUNT:-50}
+      RABBITMQ_RETRY_TTL_SECONDS: ${RABBITMQ_RETRY_TTL_SECONDS:-60}
+      RABBITMQ_RETRY_MAX_ATTEMPTS: ${RABBITMQ_RETRY_MAX_ATTEMPTS:-10}
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  email-channel:
+    build:
+      context: ../..
+      dockerfile: source/infra/docker/service.Dockerfile
+      args:
+        DISTRIBUTION: loandebtors-email-channel
+        SERVICE: email_channel
+        PORT: 8003
+    environment:
+      <<: *service-environment
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-noreply@loandebtors.local}
+      SMTP_STARTTLS: "false"
+      RATE_LIMIT_PER_SECOND: ${RATE_LIMIT_PER_SECOND:-10}
+      EMAIL_DEFAULT_LOCALE: ${EMAIL_DEFAULT_LOCALE:-ru-RU}
+      EMAIL_CONSUMER_RECONNECT_SECONDS: ${EMAIL_CONSUMER_RECONNECT_SECONDS:-5}
+    ports:
+      - "8003:8003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  audit-exporter:
+    build:
+      context: ../..
+      dockerfile: source/infra/docker/service.Dockerfile
+      args:
+        DISTRIBUTION: loandebtors-audit-exporter
+        SERVICE: audit_exporter
+        PORT: 8004
+    environment:
+      <<: *service-environment
+      AUDIT_CONSUMER_RECONNECT_SECONDS: ${AUDIT_CONSUMER_RECONNECT_SECONDS:-5}
+    ports:
+      - "8004:8004"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8004/health', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  postgres-data:
+  prometheus-data:
+  grafana-data:
+  tempo-data:
+  loki-data:
