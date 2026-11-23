@@ -1,0 +1,22 @@
+[project]
+name = "loandebtors-abs"
+version = "0.1.0"
+description = "LoanDebtors: заглушка внешней АБС для выгрузки должников"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.29",
+    "opentelemetry-instrumentation-fastapi>=0.50b0",
+    "opentelemetry-sdk>=1.29",
+    "pydantic>=2.10",
+    "pydantic-settings>=2.7",
+    "punq>=0.7",
+    "uvicorn[standard]>=0.34",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/abs"]
