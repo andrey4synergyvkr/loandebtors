@@ -19,21 +19,24 @@
 
 ## Стек
 
-- Python 3.12,
-- FastAPI,
-- Pydantic v2,
-- SQLAlchemy 2,
-- Alembic,
-- aio-pika,
-- APScheduler,
-- Jinja2,
-- Punq,
-- OpenTelemetry,
-- Grafana Tempo, Loki, Prometheus и Grafana,
-- pytest,
-- Ruff,
-- mypy,
-- uv,
+- Python 3.12
+- FastAPI
+- Pydantic v2
+- SQLAlchemy 2
+- Alembic
+- aio-pika
+- APScheduler
+- Jinja2
+- Punq
+- OpenTelemetry
+- Grafana Tempo
+- Loki
+- Prometheus
+- Grafana
+- pytest
+- Ruff
+- mypy
+- uv
 - Docker Compose.
 
 ## Быстрый старт
